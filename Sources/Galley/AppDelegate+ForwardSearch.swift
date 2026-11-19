@@ -234,7 +234,7 @@ extension AppDelegate {
     // ==========================================
     // 画面上に通知（HUD）を表示する機能
     // ==========================================
-    func showNotification(_ message: String) {
+    func showNotification(_ message: String, duration: TimeInterval = 15.0) {
         let label = NSTextField(labelWithString: message)
         label.font = .monospacedSystemFont(ofSize: 14, weight: .bold)
         label.textColor = .white
@@ -261,7 +261,7 @@ extension AppDelegate {
 
         self.container.addSubview(label)
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15.0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
             NSAnimationContext.runAnimationGroup({ context in
                 context.duration = 0.3
                 label.animator().alphaValue = 0.0

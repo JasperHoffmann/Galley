@@ -775,35 +775,100 @@ class GalleyPDFView: PDFView {
 
     @objc override func copy(_ sender: Any?) {
         if let rect = currentSelectionRect, let page = selectedPage {
-            guard let pageCopy = page.copy() as? PDFPage else { return }
-
-            pageCopy.setBounds(rect, for: .mediaBox)
-            pageCopy.setBounds(rect, for: .cropBox)
-            pageCopy.setBounds(rect, for: .bleedBox)
-            pageCopy.setBounds(rect, for: .trimBox)
-            pageCopy.setBounds(rect, for: .artBox)
-
-            let tempDoc = PDFDocument()
-            tempDoc.insert(pageCopy, at: 0)
-
-            if let pdfData = tempDoc.dataRepresentation() {
+            if let pdfData = croppedPDF(of: page, to: rect) {
                 let pb = NSPasteboard.general
                 pb.clearContents()
                 pb.setData(pdfData, forType: .pdf)
-
-                let flash = CABasicAnimation(keyPath: "opacity")
-                flash.fromValue = 1.0
-                flash.toValue = 0.0
-                flash.duration = 0.15
-                flash.autoreverses = true
-                marqueeLayer?.add(flash, forKey: "flashAnimation")
+                flashMarquee()
             }
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                self.clearMarquee()
-            }
+            clearMarqueeSoon()
         } else {
             super.copy(sender)
+        }
+    }
+
+    /// The selection as vector SVG: the native SVG type, and the markup as text for apps
+    /// (Inkscape, editors) that take pasted SVG source.
+    @objc func copyAsSVG(_ sender: Any?) {
+        exportSelection { svg, _, _, _ in
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setData(svg, forType: NSPasteboard.PasteboardType("public.svg-image"))
+            pb.setString(String(decoding: svg, as: UTF8.self), forType: .string)
+        }
+    }
+
+    /// The selection as an Excalidraw image element, linked back to this page of this PDF.
+    @objc func copyForExcalidraw(_ sender: Any?) {
+        exportSelection { svg, size, link, caption in
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(SnippetExport.excalidrawClipboard(svg: svg, size: size, link: link,
+                                                           caption: caption),
+                         forType: .string)
+        }
+    }
+
+    /// Crops the selection, converts it to SVG off the main thread, then hands the SVG, its size
+    /// in points, the source link and a public caption to `write` on the main thread.
+    private func exportSelection(
+        _ write: @escaping (Data, CGSize, String?, SnippetExport.Caption?) -> Void
+    ) {
+        guard let rect = currentSelectionRect, let page = selectedPage,
+              let pdfData = croppedPDF(of: page, to: rect) else {
+            NSSound.beep()
+            return
+        }
+        let url = document?.documentURL
+        let pageNumber = (document?.index(for: page) ?? 0) + 1
+        let info = PaperInfo(document: document, url: url)
+        let link = url.map { SnippetExport.sourceLink(pdf: $0, page: pageNumber, rect: rect, info: info) }
+        let caption: SnippetExport.Caption? = {
+            guard let text = info.caption(page: pageNumber),
+                  let publicLink = info.publicLink(page: pageNumber) else { return nil }
+            return SnippetExport.Caption(text: text, link: publicLink)
+        }()
+        let size = rect.size
+        Task { @MainActor in
+            do {
+                let svg = try await Task.detached(priority: .userInitiated) {
+                    try SnippetExport.svg(fromPDF: pdfData)
+                }.value
+                write(svg, size, link, caption)
+                self.flashMarquee()
+                self.clearMarqueeSoon()
+            } catch {
+                let alert = NSAlert()
+                alert.messageText = error.localizedDescription
+                alert.runModal()
+            }
+        }
+    }
+
+    /// A one-page PDF of `rect` on `page`: the page's content kept as vectors, every box
+    /// narrowed to the rectangle.
+    private func croppedPDF(of page: PDFPage, to rect: NSRect) -> Data? {
+        guard let pageCopy = page.copy() as? PDFPage else { return nil }
+        for box: PDFDisplayBox in [.mediaBox, .cropBox, .bleedBox, .trimBox, .artBox] {
+            pageCopy.setBounds(rect, for: box)
+        }
+        let tempDoc = PDFDocument()
+        tempDoc.insert(pageCopy, at: 0)
+        return tempDoc.dataRepresentation()
+    }
+
+    private func flashMarquee() {
+        let flash = CABasicAnimation(keyPath: "opacity")
+        flash.fromValue = 1.0
+        flash.toValue = 0.0
+        flash.duration = 0.15
+        flash.autoreverses = true
+        marqueeLayer?.add(flash, forKey: "flashAnimation")
+    }
+
+    private func clearMarqueeSoon() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            self.clearMarquee()
         }
     }
 

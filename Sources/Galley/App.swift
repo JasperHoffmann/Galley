@@ -92,6 +92,7 @@ struct GalleyApp {
         let fileMenuItem = NSMenuItem()
         fileMenuItem.submenu = fileMenu
         fileMenu.addItem(withTitle: "Open PDF file...", action: #selector(AppDelegate.openDocument(_:)), keyEquivalent: "o")
+        fileMenu.addItem(withTitle: "Set Papers Root…", action: #selector(AppDelegate.setPapersRoot(_:)), keyEquivalent: "")
         // 単一ウィンドウなので閉じる＝終了。誤操作を避けるため既定キーは付けず、
         // 欲しい人は App Shortcuts で "Close" に ⌘W を割り当てる (Issue #13)
         fileMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "")
@@ -134,6 +135,14 @@ struct GalleyApp {
         let editMenuItem = NSMenuItem()
         editMenuItem.submenu = editMenu
         editMenu.addItem(withTitle: "Copy", action: #selector(PDFView.copy(_:)), keyEquivalent: "c")
+
+        // 矩形選択を SVG / Excalidraw 用にコピー (pdftocairo が必要)
+        let copyExcalidrawItem = NSMenuItem(title: "Copy for Excalidraw", action: #selector(GalleyPDFView.copyForExcalidraw(_:)), keyEquivalent: "c")
+        copyExcalidrawItem.keyEquivalentModifierMask = [.command, .control]
+        let copySVGItem = NSMenuItem(title: "Copy as SVG", action: #selector(GalleyPDFView.copyAsSVG(_:)), keyEquivalent: "c")
+        copySVGItem.keyEquivalentModifierMask = [.command, .control, .option]
+        editMenu.addItem(copyExcalidrawItem)
+        editMenu.addItem(copySVGItem)
 
         // Color Picker の読み取り値のコピー (Digital Color Meter と同じキー)
         let copyColorTextItem = NSMenuItem(title: "Copy Color as Text", action: #selector(AppDelegate.copyColorAsText(_:)), keyEquivalent: "C")
@@ -516,9 +525,20 @@ struct GalleyApp {
             case "open":
                 // 外部から PDF を開く
                 // 例: open "galleypdf://open?pdfpath=/path/to/main.pdf&page=3"
-                guard let pdfPath = params["pdfpath"], !pdfPath.isEmpty else { break }
                 // page の指定は前回の位置より優先する
                 let page = params["page"].flatMap { Int($0) }
+                // rel=: papers root からの相対パス。移動していれば探す (AppDelegate+PaperLinks.swift)
+                if let rel = params["rel"], !rel.isEmpty {
+                    self.openPaper(rel: rel, page: page, activate: !background)
+                    break
+                }
+                guard let pdfPath = params["pdfpath"], !pdfPath.isEmpty else { break }
+                // 古い絶対パスのリンクでも、papers root の下から移動しただけなら探す
+                if !FileManager.default.fileExists(atPath: pdfPath),
+                   let rel = PaperLinks.relativePath(of: URL(fileURLWithPath: pdfPath)) {
+                    self.openPaper(rel: rel, page: page, activate: !background)
+                    break
+                }
                 self.loadPDF(url: URL(fileURLWithPath: pdfPath).absoluteURL, activate: !background,
                              restorePosition: page == nil)
                 if let page {
